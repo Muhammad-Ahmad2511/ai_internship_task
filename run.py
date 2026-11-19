@@ -15,6 +15,8 @@ Optional extras (used to process the 50 shards on free Kaggle GPUs):
     --max-shards N       only the first N shards (testing)
     --max-videos N       only the first N videos of each shard (testing)
     --devices 0,1        one worker process per GPU (default: all visible GPUs)
+    --sample-fps N       run the model on N frames per second instead of every frame
+    --half               FP16 inference
 """
 
 import argparse
@@ -121,15 +123,17 @@ def apply_rotation(img, cw):
 # One video
 # ---------------------------------------------------------------------------
 def index_video(data, video_id, model, args, timers, deadline):
-    """Decode one mp4 (bytes), run the model on every frame, return output records."""
+    """Decode one mp4 (bytes), run the model on every frame (or a sample), return output records."""
     import av
 
     secs = {}            # second -> [n_frames, [5 class counts], [people per frame]]
     pending_imgs, pending_secs = [], []
     error = None
-    n_frames = 0
+    n_frames = 0         # frames decoded
+    n_infer = 0          # frames sent to the model
     max_sec = -1
     rot_seen = 0
+    last_slot = None
 
     def flush():
         if not pending_imgs:
@@ -177,7 +181,21 @@ def index_video(data, video_id, model, args, timers, deadline):
                 ts = Fraction(n_frames) / Fraction(rate)
             if t0 is None:
                 t0 = ts
-            sec = max(0, math.floor(ts - t0))
+            rel = ts - t0
+            sec = max(0, math.floor(rel))
+            n_frames += 1
+            max_sec = max(max_sec, sec)     # every decoded frame counts for the last second
+            if deadline and n_frames % 256 == 0 and time.time() > deadline:
+                raise TimeBudgetExceeded()
+
+            if args.sample_fps:
+                # split time into 1/sample_fps slots; run the model on the first frame of each slot
+                slot = math.floor(rel * args.sample_fps)
+                if slot == last_slot:
+                    timers["decode"] += time.perf_counter() - t
+                    continue
+                last_slot = slot
+
             cw = rotation_cw(stream, frame)
             img = apply_rotation(frame.to_ndarray(format="bgr24"), cw)   # BGR, upright
             timers["decode"] += time.perf_counter() - t
@@ -185,12 +203,9 @@ def index_video(data, video_id, model, args, timers, deadline):
 
             pending_imgs.append(img)
             pending_secs.append(sec)
-            n_frames += 1
-            max_sec = max(max_sec, sec)
+            n_infer += 1
             if len(pending_imgs) >= args.batch:
                 flush()
-            if deadline and n_frames % 256 == 0 and time.time() > deadline:
-                raise TimeBudgetExceeded()
     except TimeBudgetExceeded:
         raise
     except Exception as e:  # damaged / unusual video: keep what we have, add an error line
@@ -217,7 +232,7 @@ def index_video(data, video_id, model, args, timers, deadline):
         # failed partway: keep only seconds that were complete, then one error line
         records.extend(second_record(video_id, s, secs.get(s)) for s in range(max_sec))
         records.append({"video": video_id, "error": error})
-    return records, n_frames, rot_seen
+    return records, n_frames, n_infer, rot_seen
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +243,7 @@ def process_shard(path, name, model, args, out_path, deadline):
     import pyarrow.parquet as pq
 
     timers = {"decode": 0.0, "infer": 0.0}
-    stats = {"shard": name, "videos": 0, "errors": 0, "frames": 0, "seconds": 0, "rotated": 0}
+    stats = {"shard": name, "videos": 0, "errors": 0, "frames": 0, "inferred": 0, "seconds": 0, "rotated": 0}
     t_start = time.time()
     tmp = out_path.with_suffix(".jsonl.tmp")
 
@@ -264,13 +279,14 @@ def process_shard(path, name, model, args, out_path, deadline):
                             write({"video": video_id, "error": "could not decode video (empty mp4 field)"})
                         else:
                             t = time.time()
-                            recs, nf, rot = index_video(data, video_id, model, args, timers, deadline)
+                            recs, nf, ni, rot = index_video(data, video_id, model, args, timers, deadline)
                             for r in recs:
                                 write(r)
                             stats["frames"] += nf
+                            stats["inferred"] += ni
                             stats["rotated"] += bool(rot)
                             dt = time.time() - t
-                            log(f"  {video_id}: {nf} frames, {len(recs)} lines, rot={rot}, "
+                            log(f"  {video_id}: {nf} frames ({ni} to model), {len(recs)} lines, rot={rot}, "
                                 f"{dt:.1f}s ({nf / max(dt, 1e-9):.0f} fps)")
                         stats["videos"] += 1
                         row += 1
@@ -411,6 +427,8 @@ def parse_args():
     p.add_argument("--devices", default="auto", help="'auto' (all GPUs), 'cpu', or e.g. '0,1'")
     p.add_argument("--batch", type=int, default=16, help="frames per model call")
     p.add_argument("--half", action="store_true", help="FP16 inference (off by default for the baseline)")
+    p.add_argument("--sample-fps", type=float, default=0,
+                   help="run the model on N evenly spaced frames per second (0 = every frame)")
     p.add_argument("--checkpoint-dir", help="keep per-shard results here and skip finished shards")
     p.add_argument("--max-hours", type=float, help="stop cleanly before this many hours")
     p.add_argument("--max-shards", type=int, help="only the first N shards (testing)")
