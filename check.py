@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Compare a results file with a reference using the brief's pass rules (section 5).
 
-    python check.py --ref reference/ref_shard00_5videos.jsonl --pred results.jsonl
+    python check.py --ref reference/*.jsonl --pred results.jsonl
 
+--ref takes one or more files (they are combined).
 Only videos that appear in the reference are scored, so --pred can cover more videos.
-A reference second missing from --pred counts as "no objects, 0 people".
+A reference second missing from --pred counts as "no objects, 0 people", unless
+--common is given, which scores only the videos present in both files.
 Pass rules: objects F1 >= 0.95, people exact >= 85%, people within 1 >= 95%.
 """
 
@@ -67,14 +69,34 @@ def score(ref, pred, keys):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--ref", required=True)
+    p.add_argument("--ref", required=True, nargs="+", help="one or more reference files")
     p.add_argument("--pred", required=True)
     p.add_argument("--per-video", action="store_true", help="also print scores for each video")
+    p.add_argument("--common", action="store_true",
+                   help="score only videos that appear in both the reference and --pred")
     args = p.parse_args()
 
-    ref, ref_err = load(args.ref)
+    ref, ref_err = {}, defaultdict(list)
+    for path in args.ref:
+        r, e = load(path)
+        overlap = ref.keys() & r.keys()
+        if overlap:
+            print(f"warning: {len(overlap)} seconds in {path} already came from another --ref file "
+                  f"(the later file wins)", file=sys.stderr)
+        ref.update(r)
+        for v, msgs in e.items():
+            ref_err[v].extend(msgs)
     pred, pred_err = load(args.pred)
     ref_videos = {v for v, _ in ref} | set(ref_err)
+    if args.common:
+        pred_videos = {v for v, _ in pred} | set(pred_err)
+        skipped = ref_videos - pred_videos
+        ref_videos &= pred_videos
+        ref = {k: v for k, v in ref.items() if k[0] in ref_videos}
+        if skipped:
+            print(f"--common: skipping {len(skipped)} reference videos not in --pred", file=sys.stderr)
+    if ref_err:
+        print(f"note: reference has error lines for {len(ref_err)} videos: {dict(ref_err)}", file=sys.stderr)
     keys = sorted(ref)
     extra = sorted(k for k in pred if k[0] in ref_videos and k not in ref)
 
