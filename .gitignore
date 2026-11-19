@@ -1,0 +1,20 @@
+# data and weights
+finevideo/
+*.parquet
+*.pt
+# raw / intermediate results (only results.jsonl.gz is committed)
+results.jsonl
+*.jsonl.tmp
+shards/
+.parts_*/
+test*.jsonl
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+# secrets
+.env
+
+# task brief (not ours to publish)
+*.pdf

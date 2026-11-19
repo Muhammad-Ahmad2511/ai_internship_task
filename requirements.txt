@@ -1,0 +1,10 @@
+# CUDA 12.4 builds of PyTorch (graders' driver supports CUDA 12)
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+ultralytics==8.3.40
+av==14.0.1
+pyarrow==17.0.0
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+huggingface_hub==0.26.2
