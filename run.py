@@ -15,8 +15,8 @@ Optional extras (used to process the 50 shards on free Kaggle GPUs):
     --max-shards N       only the first N shards (testing)
     --max-videos N       only the first N videos of each shard (testing)
     --devices 0,1        one worker process per GPU (default: all visible GPUs)
-    --sample-fps N       run the model on N frames per second instead of every frame
-    --half               FP16 inference
+    --sample-fps N       frames per second sent to the model (default 5; 0 = every frame)
+    --no-half            FP32 instead of the default FP16
 """
 
 import argparse
@@ -58,8 +58,12 @@ def short(e):
     return s[:200]
 
 
-class TimeBudgetExceeded(Exception):
-    pass
+class TimeBudgetExceeded(BaseException):
+    """--max-hours reached. BaseException so per-video error handling never swallows it."""
+
+
+class _Stopped(BaseException):
+    """The inference side stopped; the decode thread should exit."""
 
 
 class _StopShard(Exception):
@@ -120,42 +124,21 @@ def apply_rotation(img, cw):
 
 
 # ---------------------------------------------------------------------------
-# One video
+# Decoding one video (runs in the decode thread)
 # ---------------------------------------------------------------------------
-def index_video(data, video_id, model, args, timers, deadline):
-    """Decode one mp4 (bytes), run the model on every frame (or a sample), return output records."""
+def decode_video(data, args, emit, deadline, timers):
+    """Decode one mp4 (bytes) and call emit(second, bgr_image) for every frame the model should see.
+
+    Returns (n_frames_decoded, n_frames_emitted, max_second, error_or_None, rotation).
+    """
     import av
 
-    secs = {}            # second -> [n_frames, [5 class counts], [people per frame]]
-    pending_imgs, pending_secs = [], []
-    error = None
-    n_frames = 0         # frames decoded
-    n_infer = 0          # frames sent to the model
+    n_frames = 0
+    n_emit = 0
     max_sec = -1
     rot_seen = 0
     last_slot = None
-
-    def flush():
-        if not pending_imgs:
-            return
-        t = time.perf_counter()
-        results = model.predict(
-            pending_imgs, imgsz=IMGSZ, conf=CONF, iou=IOU, classes=CLASS_IDS,
-            half=args.half, device=args.device, verbose=False,
-        )
-        for s, r in zip(pending_secs, results):
-            cls = r.boxes.cls.int().tolist() if r.boxes is not None else []
-            agg = secs.get(s)
-            if agg is None:
-                agg = secs[s] = [0, [0] * len(NAMES), []]
-            agg[0] += 1
-            for c in set(cls):
-                agg[1][COL[c]] += 1
-            agg[2].append(cls.count(PERSON_ID))
-        pending_imgs.clear()
-        pending_secs.clear()
-        timers["infer"] += time.perf_counter() - t
-
+    error = None
     container = None
     try:
         container = av.open(io.BytesIO(data), mode="r")
@@ -189,7 +172,7 @@ def index_video(data, video_id, model, args, timers, deadline):
                 raise TimeBudgetExceeded()
 
             if args.sample_fps:
-                # split time into 1/sample_fps slots; run the model on the first frame of each slot
+                # split time into 1/sample_fps slots; the model sees the first frame of each slot
                 slot = math.floor(rel * args.sample_fps)
                 if slot == last_slot:
                     timers["decode"] += time.perf_counter() - t
@@ -200,52 +183,145 @@ def index_video(data, video_id, model, args, timers, deadline):
             img = apply_rotation(frame.to_ndarray(format="bgr24"), cw)   # BGR, upright
             timers["decode"] += time.perf_counter() - t
             rot_seen = rot_seen or cw
-
-            pending_imgs.append(img)
-            pending_secs.append(sec)
-            n_infer += 1
-            if len(pending_imgs) >= args.batch:
-                flush()
-    except TimeBudgetExceeded:
-        raise
+            emit(sec, img)
+            n_emit += 1
     except Exception as e:  # damaged / unusual video: keep what we have, add an error line
-        error = f"could not decode video ({short(e)})" if n_frames == 0 else f"decode failed after {n_frames} frames ({short(e)})"
+        error = (f"could not decode video ({short(e)})" if n_frames == 0
+                 else f"decode failed after {n_frames} frames ({short(e)})")
     finally:
         if container is not None:
             try:
                 container.close()
             except Exception:
                 pass
+    return n_frames, n_emit, max_sec, error, rot_seen
 
-    try:
-        flush()
-    except Exception as e:
-        error = error or f"inference failed ({short(e)})"
-        pending_imgs.clear()
 
-    records = []
+def video_records(video_id, secs, n_frames, max_sec, error):
+    """Turn per-second aggregates into output lines (section 4 of the brief)."""
     if n_frames == 0:
-        records.append({"video": video_id, "error": error or "could not decode video (no frames)"})
-    elif error is None:
-        records.extend(second_record(video_id, s, secs.get(s)) for s in range(max_sec + 1))
-    else:
-        # failed partway: keep only seconds that were complete, then one error line
-        records.extend(second_record(video_id, s, secs.get(s)) for s in range(max_sec))
-        records.append({"video": video_id, "error": error})
-    return records, n_frames, n_infer, rot_seen
+        return [{"video": video_id, "error": error or "could not decode video (no frames)"}]
+    if error is None:
+        return [second_record(video_id, s, secs.get(s)) for s in range(max_sec + 1)]
+    # failed partway: keep only seconds that were complete, then one error line
+    recs = [second_record(video_id, s, secs.get(s)) for s in range(max_sec)]
+    recs.append({"video": video_id, "error": error})
+    return recs
 
 
 # ---------------------------------------------------------------------------
-# One Parquet shard
+# Decode thread for one shard: reads Parquet rows, decodes, puts frames on a queue
+# ---------------------------------------------------------------------------
+def produce_shard(path, args, q, stop, deadline, timers):
+    """Messages put on q:
+        ("frame", row, second, img)                              a frame for the model
+        ("done", row, n_frames, n_emit, max_sec, error, rot)     a video is fully decoded
+        ("rowerr", row, message)                                 a row with no usable video
+        ("timeout",) / ("fatal", message) / ("end",)
+    """
+    import pyarrow.parquet as pq
+
+    def put(item):
+        while not stop.is_set():
+            try:
+                q.put(item, timeout=0.5)
+                return
+            except queue.Full:
+                pass
+        raise _Stopped()
+
+    try:
+        try:
+            pf = pq.ParquetFile(path)
+            num_rows = pf.metadata.num_rows
+        except Exception as e:
+            put(("rowerr", 0, f"could not read parquet file ({short(e)})"))
+            put(("end",))
+            return
+        row = 0
+        try:
+            for batch in pf.iter_batches(batch_size=1, columns=["mp4"]):
+                col = batch.column(0)
+                for i in range(len(col)):
+                    if args.max_videos and row >= args.max_videos:
+                        raise _StopShard()
+                    if deadline and time.time() > deadline:
+                        raise TimeBudgetExceeded()
+                    data = col[i].as_py()
+                    if not isinstance(data, (bytes, bytearray)) or not data:
+                        put(("rowerr", row, "could not decode video (empty mp4 field)"))
+                    else:
+                        r = row
+                        res = decode_video(data, args, lambda s, img: put(("frame", r, s, img)),
+                                           deadline, timers)
+                        put(("done", row) + res)
+                    row += 1
+        except _StopShard:
+            pass
+        except Exception as e:  # file damaged partway: mark the remaining rows
+            for r in range(row, num_rows):
+                if args.max_videos and r >= args.max_videos:
+                    break
+                put(("rowerr", r, f"could not read row ({short(e)})"))
+        put(("end",))
+    except _Stopped:
+        return
+    except TimeBudgetExceeded:
+        try:
+            put(("timeout",))
+        except _Stopped:
+            pass
+    except BaseException as e:
+        try:
+            put(("fatal", short(e)))
+        except _Stopped:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# One Parquet shard: decode thread + batched inference in this thread
 # ---------------------------------------------------------------------------
 def process_shard(path, name, model, args, out_path, deadline):
     """Write every record of one shard to out_path (atomically). Returns stats dict."""
-    import pyarrow.parquet as pq
+    import threading
 
-    timers = {"decode": 0.0, "infer": 0.0}
+    timers = {"decode": 0.0, "infer": 0.0, "wait": 0.0}
     stats = {"shard": name, "videos": 0, "errors": 0, "frames": 0, "inferred": 0, "seconds": 0, "rotated": 0}
     t_start = time.time()
     tmp = out_path.with_suffix(".jsonl.tmp")
+
+    q = queue.Queue(maxsize=max(4 * args.batch, 32))
+    stop = threading.Event()
+    producer = threading.Thread(target=produce_shard, args=(path, args, q, stop, deadline, timers), daemon=True)
+
+    per_row = {}          # row -> {second: [n_frames, [5 class counts], [people per frame]]}
+    failed = {}           # row -> inference error message
+    pending = []          # (row, second, img)
+
+    def flush():
+        if not pending:
+            return
+        t = time.perf_counter()
+        try:
+            results = model.predict(
+                [p[2] for p in pending], imgsz=IMGSZ, conf=CONF, iou=IOU, classes=CLASS_IDS,
+                half=args.half, device=args.device, verbose=False,
+            )
+            for (row, s, _), r in zip(pending, results):
+                cls = r.boxes.cls.int().tolist() if r.boxes is not None else []
+                secs = per_row.setdefault(row, {})
+                agg = secs.get(s)
+                if agg is None:
+                    agg = secs[s] = [0, [0] * len(NAMES), []]
+                agg[0] += 1
+                for c in set(cls):
+                    agg[1][COL[c]] += 1
+                agg[2].append(cls.count(PERSON_ID))
+        except Exception as e:
+            for row, _, _ in pending:
+                failed.setdefault(row, f"inference failed ({short(e)})")
+        pending.clear()
+        timers["infer"] += time.perf_counter() - t
 
     with open(tmp, "w", encoding="utf-8") as f:
         def write(rec):
@@ -255,54 +331,50 @@ def process_shard(path, name, model, args, out_path, deadline):
             else:
                 stats["seconds"] += 1
 
+        t_video = time.time()
+        producer.start()
         try:
-            pf = pq.ParquetFile(path)
-            num_rows = pf.metadata.num_rows
-        except Exception as e:
-            write({"video": f"{name}:0", "error": f"could not read parquet file ({short(e)})"})
-            num_rows = 0
-            pf = None
-
-        row = 0
-        if pf is not None:
-            try:
-                for batch in pf.iter_batches(batch_size=1, columns=["mp4"]):
-                    col = batch.column(0)
-                    for i in range(len(col)):
-                        if args.max_videos and row >= args.max_videos:
-                            raise _StopShard()
-                        if deadline and time.time() > deadline:
-                            raise TimeBudgetExceeded()
-                        video_id = f"{name}:{row}"
-                        data = col[i].as_py()
-                        if not isinstance(data, (bytes, bytearray)) or not data:
-                            write({"video": video_id, "error": "could not decode video (empty mp4 field)"})
-                        else:
-                            t = time.time()
-                            recs, nf, ni, rot = index_video(data, video_id, model, args, timers, deadline)
-                            for r in recs:
-                                write(r)
-                            stats["frames"] += nf
-                            stats["inferred"] += ni
-                            stats["rotated"] += bool(rot)
-                            dt = time.time() - t
-                            log(f"  {video_id}: {nf} frames ({ni} to model), {len(recs)} lines, rot={rot}, "
-                                f"{dt:.1f}s ({nf / max(dt, 1e-9):.0f} fps)")
-                        stats["videos"] += 1
-                        row += 1
-            except _StopShard:
-                pass
-            except TimeBudgetExceeded:
-                raise
-            except Exception as e:  # file damaged partway: mark the remaining rows
-                for r in range(row, num_rows):
-                    if args.max_videos and r >= args.max_videos:
-                        break
-                    write({"video": f"{name}:{r}", "error": f"could not read row ({short(e)})"})
+            while True:
+                t = time.perf_counter()
+                item = q.get()
+                timers["wait"] += time.perf_counter() - t
+                kind = item[0]
+                if kind == "frame":
+                    pending.append(item[1:])
+                    if len(pending) >= args.batch:
+                        flush()
+                elif kind == "done":
+                    _, row, n_frames, n_emit, max_sec, error, rot = item
+                    flush()   # all of this video's frames must be counted before writing it
+                    video_id = f"{name}:{row}"
+                    error = error or failed.pop(row, None)
+                    recs = video_records(video_id, per_row.pop(row, {}), n_frames, max_sec, error)
+                    for rec in recs:
+                        write(rec)
+                    stats["videos"] += 1
+                    stats["frames"] += n_frames
+                    stats["inferred"] += n_emit
+                    stats["rotated"] += bool(rot)
+                    dt = time.time() - t_video
+                    t_video = time.time()
+                    log(f"  {video_id}: {n_frames} frames ({n_emit} to model), {len(recs)} lines, "
+                        f"rot={rot}, {dt:.1f}s ({n_frames / max(dt, 1e-9):.0f} fps)")
+                elif kind == "rowerr":
+                    write({"video": f"{name}:{item[1]}", "error": item[2]})
+                    stats["videos"] += 1
+                elif kind == "timeout":
+                    raise TimeBudgetExceeded()
+                elif kind == "fatal":
+                    raise RuntimeError(f"decode thread failed: {item[1]}")
+                elif kind == "end":
+                    break
+        finally:
+            stop.set()
+            producer.join(timeout=30)
 
     os.replace(tmp, out_path)   # the shard only counts as done once this rename happens
     stats.update(decode_s=round(timers["decode"], 1), infer_s=round(timers["infer"], 1),
-                 total_s=round(time.time() - t_start, 1))
+                 gpu_wait_s=round(timers["wait"], 1), total_s=round(time.time() - t_start, 1))
     return stats
 
 
@@ -426,9 +498,10 @@ def parse_args():
     p.add_argument("--weights", default="yolo11l.pt")
     p.add_argument("--devices", default="auto", help="'auto' (all GPUs), 'cpu', or e.g. '0,1'")
     p.add_argument("--batch", type=int, default=16, help="frames per model call")
-    p.add_argument("--half", action="store_true", help="FP16 inference (off by default for the baseline)")
-    p.add_argument("--sample-fps", type=float, default=0,
-                   help="run the model on N evenly spaced frames per second (0 = every frame)")
+    p.add_argument("--half", action=argparse.BooleanOptionalAction, default=True,
+                   help="FP16 inference (default on; --no-half for FP32)")
+    p.add_argument("--sample-fps", type=float, default=5,
+                   help="frames per second sent to the model (default 5; 0 = every frame)")
     p.add_argument("--checkpoint-dir", help="keep per-shard results here and skip finished shards")
     p.add_argument("--max-hours", type=float, help="stop cleanly before this many hours")
     p.add_argument("--max-shards", type=int, help="only the first N shards (testing)")
