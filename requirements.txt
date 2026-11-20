@@ -7,5 +7,5 @@ ultralytics==8.3.40
 av==14.0.1
 pyarrow==18.1.0
 numpy==2.1.1
-opencv-python-headless==4.10.0.84
+opencv-python==4.10.0.84
 huggingface_hub==0.26.2

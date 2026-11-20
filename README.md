@@ -5,7 +5,11 @@ For every second of every video in a folder of FineVideo Parquet files, `run.py`
 
 ## 1. System packages
 
-None. PyAV ships its own FFmpeg.
+OpenCV (pulled in by Ultralytics) needs these libraries on a minimal Ubuntu 22.04:
+
+```bash
+sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+```
 
 ## 2. Install
 

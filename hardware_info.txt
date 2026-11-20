@@ -1,0 +1,16 @@
+name, memory.total [MiB]
+Tesla T4, 15360 MiB
+Tesla T4, 15360 MiB
+CPU(s):                                  4
+Model name:                              Intel(R) Xeon(R) CPU @ 2.00GHz
+Thread(s) per core:                      2
+Core(s) per socket:                      2
+               total        used        free      shared  buff/cache   available
+Mem:            31Gi       1.4Gi       7.2Gi       1.7Mi        23Gi        29Gi
+Swap:             0B          0B          0B
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         8.0T  5.6T  2.5T  70% /
+/dev/loop2       20G  120K   20G   1% /kaggle/working
+PRETTY_NAME="Ubuntu 24.04.4 LTS"
+NAME="Ubuntu"
+Python 3.13.16
