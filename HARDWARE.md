@@ -10,7 +10,7 @@ unattended "Save & Run All" commit. Raw output of the hardware commands is in
 | **GPU** | 2 × NVIDIA Tesla T4, 15 GB (15,360 MiB) each — one worker process per GPU |
 | **CPU** | Intel Xeon @ 2.00 GHz, 4 vCPUs (2 cores × 2 threads) |
 | **RAM** | 31 GiB |
-| **Disk** | DISK_TYPE_TODO (Kaggle VM; shards streamed to `/tmp` one at a time and deleted after use) |
+| **Disk** | SSD — Google Cloud Persistent Disk, reported as non-rotational (`ROTA 0`); shards were streamed to `/tmp` one at a time and deleted after use |
 | **OS** | Ubuntu 24.04.4 LTS, Python 3.13.16 |
 
 ## Full run time

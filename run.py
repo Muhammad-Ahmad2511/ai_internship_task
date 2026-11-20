@@ -34,6 +34,10 @@ import time
 from fractions import Fraction
 from pathlib import Path
 
+# We never plot. Force a plain matplotlib backend so a notebook-only setting inherited from the
+# environment (e.g. Jupyter's MPLBACKEND=module://matplotlib_inline...) cannot break `import ultralytics`.
+os.environ["MPLBACKEND"] = "Agg"
+
 # ---------------------------------------------------------------------------
 # Fixed task settings (section 3 of the brief)
 # ---------------------------------------------------------------------------
