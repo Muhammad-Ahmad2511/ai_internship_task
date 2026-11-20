@@ -1,0 +1,42 @@
+[07:41:26] worker 1: done train-00025-of-01357.parquet: {"shard": "train-00025-of-01357.parquet", "videos": 4, "errors": 0, "frames": 26979, "inferred": 26979, "seconds": 952, "rotated": 0, "decode_s": 29.0, "infer_s": 505.2, "gpu_wait_s": 1.8, "total_s": 507.0}
+[07:42:32] worker 0: done train-00005-of-01357.parquet: {"shard": "train-00005-of-01357.parquet", "videos": 4, "errors": 0, "frames": 29382, "inferred": 29382, "seconds": 1097, "rotated": 0, "decode_s": 29.6, "infer_s": 571.2, "gpu_wait_s": 1.8, "total_s": 573.0}
+[07:48:56] worker 0: done train-00015-of-01357.parquet: {"shard": "train-00015-of-01357.parquet", "videos": 4, "errors": 0, "frames": 19219, "inferred": 19219, "seconds": 687, "rotated": 0, "decode_s": 17.6, "infer_s": 378.7, "gpu_wait_s": 0.5, "total_s": 379.2}
+[07:57:58] worker 1: done train-00035-of-01357.parquet: {"shard": "train-00035-of-01357.parquet", "videos": 4, "errors": 0, "frames": 50911, "inferred": 50911, "seconds": 1700, "rotated": 0, "decode_s": 33.5, "infer_s": 990.2, "gpu_wait_s": 1.3, "total_s": 991.5}
+[08:06:02] worker 1: done train-00045-of-01357.parquet: {"shard": "train-00045-of-01357.parquet", "videos": 4, "errors": 0, "frames": 25981, "inferred": 25981, "seconds": 997, "rotated": 0, "decode_s": 14.6, "infer_s": 478.6, "gpu_wait_s": 0.7, "total_s": 479.3}
+[08:06:03] COMPLETE: 5/5 shards merged into /kaggle/working/ref_extra_5shards_4videos.jsonl in 33.2 min
+5433 /kaggle/working/ref_extra_5shards_4videos.jsonl
+=== submitted results vs NEW reference (20 videos)
+videos: 20   seconds: 5433   missing in pred: 0   extra in pred: 0
+objects F1     : 0.9898   (need >= 0.95)   tp=4546 fp=36 fn=58
+people exact   : 0.9610   (need >= 0.85)
+people within 1: 0.9972   (need >= 0.95)
+per class (tp/fp/fn): person 3992/25/35, car 278/2/5, dog 18/0/2, laptop 33/2/3, cell phone 225/7/13
+  train-00005-of-01357.parquet:0: n=276 F1=1.000 exact=0.917 within1=0.993
+  train-00005-of-01357.parquet:1: n=242 F1=0.947 exact=0.946 within1=1.000
+  train-00005-of-01357.parquet:2: n=448 F1=0.986 exact=0.938 within1=0.993
+  train-00005-of-01357.parquet:3: n=131 F1=1.000 exact=0.969 within1=0.985
+  train-00015-of-01357.parquet:0: n=212 F1=0.987 exact=0.976 within1=1.000
+  train-00015-of-01357.parquet:1: n=227 F1=0.984 exact=0.978 within1=1.000
+  train-00015-of-01357.parquet:2: n=67 F1=0.985 exact=0.881 within1=0.985
+  train-00015-of-01357.parquet:3: n=181 F1=0.994 exact=0.917 within1=0.978
+  train-00025-of-01357.parquet:0: n=297 F1=0.994 exact=0.987 within1=1.000
+  train-00025-of-01357.parquet:1: n=217 F1=0.991 exact=0.806 within1=0.991
+  train-00025-of-01357.parquet:2: n=110 F1=0.996 exact=0.845 within1=1.000
+  train-00025-of-01357.parquet:3: n=328 F1=1.000 exact=1.000 within1=1.000
+  train-00035-of-01357.parquet:0: n=556 F1=0.982 exact=0.959 within1=1.000
+  train-00035-of-01357.parquet:1: n=255 F1=0.973 exact=0.933 within1=0.996
+  train-00035-of-01357.parquet:2: n=329 F1=0.994 exact=0.994 within1=1.000
+  train-00035-of-01357.parquet:3: n=560 F1=1.000 exact=1.000 within1=1.000
+  train-00045-of-01357.parquet:0: n=55 F1=1.000 exact=0.982 within1=1.000
+  train-00045-of-01357.parquet:1: n=301 F1=0.936 exact=0.990 within1=1.000
+  train-00045-of-01357.parquet:2: n=585 F1=0.994 exact=0.997 within1=1.000
+  train-00045-of-01357.parquet:3: n=56 F1=0.973 exact=1.000 within1=1.000
+PASS
+=== submitted results vs ALL references (37 videos)
+videos: 37   seconds: 9371   missing in pred: 0   extra in pred: 0
+objects F1     : 0.9880   (need >= 0.95)   tp=7859 fp=81 fn=110
+people exact   : 0.9608   (need >= 0.85)
+people within 1: 0.9971   (need >= 0.95)
+per class (tp/fp/fn): person 6973/50/63, car 405/11/11, dog 18/1/2, laptop 90/8/7, cell phone 373/11/27
+PASS
+done

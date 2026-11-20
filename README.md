@@ -50,7 +50,11 @@ It uses all visible GPUs automatically (one worker process per GPU).
 6. Results are written per shard, then merged into the output file.
 
 Sampling rate and FP16 were chosen by comparing against full-frame FP32 results on 17 videos
-(`check.py`, `reference/`): at 5 fps FP16 the objects F1 was 0.986, people exact 0.961, within 1 0.997.
+(`check.py`, `reference/`). The submitted `results.jsonl.gz` was then checked against full-frame FP32
+references for 37 videos from 10 shards (9,371 seconds): objects F1 0.988, people exact 0.961,
+people within 1 0.997 (thresholds 0.95 / 0.85 / 0.95). All reference files are in `reference/`;
+the logs of these checks (including a clean Python 3.11 install test) are in `validation/`.
+Re-check with: `python check.py --ref reference/*.jsonl --pred results.jsonl.gz`
 
 ## Optional flags (used for the full 50-file run on Kaggle)
 

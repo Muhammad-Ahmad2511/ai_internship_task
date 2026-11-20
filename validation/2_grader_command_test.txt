@@ -1,0 +1,14 @@
+[07:32:49] worker 1: done train-00000-of-01357.parquet: {"shard": "train-00000-of-01357.parquet", "videos": 5, "errors": 0, "frames": 43431, "inferred": 7691, "seconds": 1541, "rotated": 0, "decode_s": 25.3, "infer_s": 71.8, "gpu_wait_s": 1.2, "total_s": 73.1}
+[07:32:49] worker 1: finished
+[07:32:50] COMPLETE: 1/1 shards merged into /tmp/g/out.jsonl in 1.4 min
+
+real	1m24.465s
+user	2m8.784s
+sys	0m9.219s
+videos: 5   seconds: 1541   missing in pred: 0   extra in pred: 0
+objects F1     : 0.9693   (need >= 0.95)   tp=948 fp=28 fn=32
+people exact   : 0.9338   (need >= 0.85)
+people within 1: 0.9955   (need >= 0.95)
+per class (tp/fp/fn): person 879/22/25, car 19/5/3, dog 0/0/0, laptop 34/0/2, cell phone 16/1/2
+PASS
+done
